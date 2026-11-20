@@ -16,29 +16,44 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.opacity = 0), 1800);
 }
 
-/* ---------- Appels API : file d'attente + cache (limite Jikan : 3 req/s) ---------- */
+/* ---------- Appels API : file d'attente + cache + RÉESSAIS ---------- */
 const cache = new Map();
 let queue = Promise.resolve();
+
 function api(path) {
   if (cache.has(path)) return Promise.resolve(cache.get(path));
+  
   const job = queue.then(async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // On fait jusqu'à 5 tentatives si le réseau échoue
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const res = await fetch(API + path);
-        if (res.status === 429) { await sleep(1200); continue; }   // trop de requêtes : on patiente
+        
+        // Si on est bloqué par la limite de requêtes (429), on attend 2.5 secondes
+        if (res.status === 429) { 
+          console.warn("Trop de requêtes (429), attente de 2.5s...");
+          await sleep(2500); 
+          continue; 
+        }
+        
         if (!res.ok) throw new Error('Erreur API (' + res.status + ')');
+        
         const json = await res.json();
         cache.set(path, json);
-        await sleep(400);                                           // espace les requêtes
+        
+        // On attend 1 seconde entre chaque requête pour laisser respirer l'API
+        await sleep(1000); 
         return json;
+        
       } catch (err) {
-        // Si c'est une erreur réseau (ex: Failed to fetch), on attend un peu et on réessaie
-        console.warn("Tentative " + (attempt + 1) + " échouée, on réessaie...");
-        await sleep(1500); 
+        // Si le réseau plante (Failed to fetch), on attend et on réessaie
+        console.warn("Tentative " + (attempt + 1) + " échouée, on réessaie dans 2s...");
+        await sleep(2000); 
       }
     }
-    throw new Error('Impossible de contacter le serveur Jikan. Vérifiez votre connexion.');
+    throw new Error('Connexion impossible. Désactivez votre bloqueur de pub (Brave) et réessayez.');
   });
+  
   queue = job.catch(() => {});
   return job;
 }
@@ -111,11 +126,12 @@ async function renderHome() {
   ];
   view.innerHTML = `<section id="hero" class="mt-4 skeleton" style="min-height:22rem"></section>` +
     sections.map(([id, t]) => `<section class="mt-8"><h2 class="text-xl font-bold mb-3">${t}</h2><div id="s-${id}">${skeletonRow()}</div></section>`).join('');
+  
   for (const [id, , path, type] of sections) {
     try {
       const { data } = await api(path);
       if (my !== token) return;
-      if (id === 'pop') renderHero(data[0]);
+      if (id === 'pop' && data.length > 0) renderHero(data[0]);
       const seen = new Set();
       const items = data.filter((d) => !seen.has(d.mal_id) && seen.add(d.mal_id)).map((d) => norm(d, type));
       $('#s-' + id).innerHTML = `<div class="row">${items.map(cardHTML).join('')}</div>`;
@@ -130,6 +146,7 @@ async function renderHome() {
 function renderHero(a) {
   const img = a.images?.jpg?.large_image_url || '';
   const el = $('#hero');
+  if(!el) return;
   el.classList.remove('skeleton'); el.classList.add('hero');
   el.style.backgroundImage = `url('${img}')`; el.style.minHeight = '';
   el.innerHTML = `<div class="p-6 md:p-12 flex flex-col justify-end min-h-[24rem] md:min-h-[30rem] max-w-2xl">
@@ -152,7 +169,7 @@ function renderExplore() {
     <div id="results"></div>`;
   $('#q').addEventListener('input', (e) => {
     clearTimeout(debounce);
-    debounce = setTimeout(() => { S.q = e.target.value.trim(); S.page = 1; loadResults(); }, 450);
+    debounce = setTimeout(() => { S.q = e.target.value.trim(); S.page = 1; loadResults(); }, 600); // Augmenté à 600ms
   });
   loadResults();
 }
@@ -233,7 +250,11 @@ async function openDetail(type, id) {
       ${yt ? `<h3 class="font-bold mt-6 mb-2">Bande-annonce</h3><div class="aspect-video rounded-2xl overflow-hidden bg-black"><iframe class="w-full h-full" src="${esc(yt)}" allowfullscreen loading="lazy" title="Bande-annonce"></iframe></div>` : ''}
     </div>`;
     updateFavUI();
-  } catch (e) { body.innerHTML = `<div class="pt-14">${errorBox(e.message, 'Fermer')}</div>`; body.querySelector('[data-retry]').dataset.close = 1; }
+  } catch (e) { 
+    body.innerHTML = `<div class="pt-14">${errorBox(e.message, 'Fermer')}</div>`; 
+    const btn = body.querySelector('[data-retry]');
+    if(btn) btn.dataset.close = 1; 
+  }
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modalBody').innerHTML = ''; document.body.style.overflow = ''; }
 
