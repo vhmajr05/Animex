@@ -23,15 +23,21 @@ function api(path) {
   if (cache.has(path)) return Promise.resolve(cache.get(path));
   const job = queue.then(async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch(API + path);
-      if (res.status === 429) { await sleep(1200); continue; }   // trop de requêtes : on patiente
-      if (!res.ok) throw new Error('Erreur API (' + res.status + ')');
-      const json = await res.json();
-      cache.set(path, json);
-      await sleep(400);                                           // espace les requêtes
-      return json;
+      try {
+        const res = await fetch(API + path);
+        if (res.status === 429) { await sleep(1200); continue; }   // trop de requêtes : on patiente
+        if (!res.ok) throw new Error('Erreur API (' + res.status + ')');
+        const json = await res.json();
+        cache.set(path, json);
+        await sleep(400);                                           // espace les requêtes
+        return json;
+      } catch (err) {
+        // Si c'est une erreur réseau (ex: Failed to fetch), on attend un peu et on réessaie
+        console.warn("Tentative " + (attempt + 1) + " échouée, on réessaie...");
+        await sleep(1500); 
+      }
     }
-    throw new Error('Trop de requêtes, réessayez dans un instant.');
+    throw new Error('Impossible de contacter le serveur Jikan. Vérifiez votre connexion.');
   });
   queue = job.catch(() => {});
   return job;
